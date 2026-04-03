@@ -88,9 +88,10 @@ function processItems() {
         result = { success: false, error: '타임아웃 — 항목 처리 시간 초과' };
       }
 
-      // 결과 기입
+      // 결과 기입: 파일명 + 링크
       if (result.success && result.fileUrl) {
-        sheet.getRange(row, resultCol).setValue(result.fileUrl);
+        var displayValue = result.fileName + '\n' + result.fileUrl;
+        sheet.getRange(row, resultCol).setValue(displayValue);
         if (remarksCol > 0 && result.remarks) {
           sheet.getRange(row, remarksCol).setValue(result.remarks);
         }
