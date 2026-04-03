@@ -14,6 +14,19 @@
 
 var ITEM_TIMEOUT_MS = 50000;
 
+/**
+ * config에 저장된 시트명으로 대상 시트를 반환한다.
+ * continuation 트리거에서도 항상 시작 시점의 시트를 사용.
+ */
+function getTargetSheet(config) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (config && config.sheetName) {
+    var sheet = ss.getSheetByName(config.sheetName);
+    if (sheet) return sheet;
+  }
+  return ss.getActiveSheet();
+}
+
 function processItems() {
   var startTime = Date.now();
   var state = loadState();
@@ -42,7 +55,7 @@ function processItems() {
     state.folderIds = treeResult.folderIds;
     state.pathMap = treeResult.pathMap;
 
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var sheet = getTargetSheet(config);
     state.totalItems = sheet.getLastRow() > 1 ? sheet.getLastRow() - 1 : 0;
     state.lastProcessedIndex = 0;
 
@@ -174,7 +187,7 @@ function processItems() {
   // Phase 5: 결과 기입 (AI 모드)
   // ================================================================
   if (state.phase === 'WRITE_RESULTS') {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var sheet = getTargetSheet(config);
     var searchColIndices = config.searchColIndices || [config.searchColIndex];
     var resultCol = config.resultColIndex + 1;
     var remarksCol = config.remarksColIndex >= 0 ? config.remarksColIndex + 1 : -1;
@@ -259,7 +272,7 @@ function processItems() {
   // 키워드 모드: 항목별 개별 처리 (기존 방식)
   // ================================================================
   if (state.phase === 'ITEM_PROCESSING') {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var sheet = getTargetSheet(config);
     var searchColIndices = config.searchColIndices || [config.searchColIndex];
     var resultCol = config.resultColIndex + 1;
     var remarksCol = config.remarksColIndex >= 0 ? config.remarksColIndex + 1 : -1;
@@ -367,7 +380,7 @@ function processItemKeyword(itemContent, state) {
 function readAllSearchItems(state) {
   if (state._searchItemsCache) return state._searchItemsCache;
 
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var sheet = getTargetSheet(state.config);
   var config = state.config;
   var searchColIndices = config.searchColIndices || [config.searchColIndex];
   var lastRow = sheet.getLastRow();

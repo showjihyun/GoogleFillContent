@@ -88,6 +88,11 @@ function startSearch(config) {
   lock.releaseLock();
 
   saveRecentFolder(config.folderUrl);
+
+  // 현재 활성 시트명을 저장 — continuation 트리거에서도 같은 시트 사용
+  var activeSheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  config.sheetName = activeSheet.getName();
+
   var state = {
     phase: 'TREE_COLLECTION',
     config: config,
