@@ -91,33 +91,91 @@ function searchByAI(itemContent, folderIds) {
 // ============================
 
 function analyzeContext(itemContent, apiKey) {
+  // 먼저 직접 참조를 추출
+  var directRefs = extractDirectReferences(itemContent);
+
   var prompt =
     '당신은 프로젝트 산출물 문서 전문가입니다.\n\n' +
     '다음은 솔루션 상용화 매뉴얼의 한 항목입니다. ' +
     '이 항목이 요구하는 산출물이 어떤 문서인지 문맥을 분석하세요.\n\n' +
-    '단순 키워드 추출이 아닌, 이 항목의 의미와 목적을 이해하여:\n' +
-    '- 어떤 종류의 문서인지 (예: 요구사항 정의서, 테스트 결과 보고서, 아키텍처 설계서)\n' +
-    '- 이 문서에 어떤 내용이 담겨 있을지\n' +
-    '- Google Drive에서 찾으려면 어떤 검색어가 효과적일지\n' +
-    '- 파일명이 어떤 패턴일 수 있는지\n\n' +
     '항목 내용:\n' + String(itemContent) + '\n\n' +
+    '=== 중요 분석 규칙 ===\n\n' +
+    '1. **직접 참조 감지**: 내용에 "XXX 별도 존재", "XXX 참조", "XXX 참고", "XXX 문서"처럼\n' +
+    '   특정 문서를 직접 언급하는 표현이 있으면, 그 문서명을 최우선 검색 쿼리로 사용하세요.\n' +
+    '   예: "운영자 매뉴얼 별도 존재" → 검색 쿼리 1순위: "운영자 매뉴얼"\n\n' +
+    '2. **유사어/동의어 확장**: 한국어 산출물명은 조직마다 다르게 부릅니다.\n' +
+    '   반드시 다음 변형을 모두 생성하세요:\n' +
+    '   - 한자어 변형: 운영자/운용자, 관리자/어드민, 사용자/유저\n' +
+    '   - 문서 유형 변형: 매뉴얼/가이드/안내서/지침서/설명서\n' +
+    '   - 띄어쓰기 변형: "운용자매뉴얼"/"운용자 매뉴얼"\n' +
+    '   - 영문: admin manual, operator guide\n\n' +
+    '3. **내용 기반 추론**: 항목 내용이 설명하는 기능/절차를 포함하는 문서를 찾으세요.\n' +
+    '   예: "계정/역할/권한 구조" → 관리자 가이드, 운영 매뉴얼에 포함될 가능성 높음\n\n' +
+    (directRefs.length > 0
+      ? '=== 감지된 직접 참조 ===\n다음 문서가 직접 언급되었습니다: ' + directRefs.join(', ') + '\n이 문서명과 유사어를 검색 쿼리 최상위에 배치하세요.\n\n'
+      : '') +
     'JSON으로 응답하세요:\n' +
     '{\n' +
-    '  "documentType": "이 항목이 요구하는 산출물 유형 (한 줄)",\n' +
-    '  "purpose": "이 산출물의 목적과 기대 내용 (한 줄)",\n' +
-    '  "searchQueries": ["Drive 검색 쿼리1", "쿼리2", "쿼리3", "쿼리4", "쿼리5"],\n' +
-    '  "fileNamePatterns": ["예상 파일명 패턴1", "패턴2"],\n' +
-    '  "relatedTerms": ["동의어/유사어1", "유사어2", "유사어3"]\n' +
+    '  "documentType": "산출물 유형",\n' +
+    '  "purpose": "목적과 기대 내용",\n' +
+    '  "directReferences": ["내용에서 직접 언급된 문서명 (있을 경우)"],\n' +
+    '  "searchQueries": ["쿼리1(직접참조 우선)", "쿼리2(유사어)", "쿼리3", "쿼리4", "쿼리5", "쿼리6", "쿼리7"],\n' +
+    '  "fileNamePatterns": ["예상 파일명1", "패턴2", "패턴3"],\n' +
+    '  "relatedTerms": ["동의어1", "유사어2", "변형3", "영문4"]\n' +
     '}\n\n' +
-    '검색 쿼리는 다양한 관점으로 5개 이상 생성하세요:\n' +
-    '- 정확한 문서명 (예: "요구사항정의서")\n' +
-    '- 축약/변형 (예: "요구사항", "SRS")\n' +
-    '- 내용 기반 (예: "기능 요구사항 목록")\n' +
-    '- 영문 표현 (예: "requirements specification")\n' +
-    '- 유사 문서명 (예: "요구사항 명세서")';
+    '검색 쿼리는 7개 이상, 다음 우선순위로 생성:\n' +
+    '1순위: 직접 참조된 문서명 그대로\n' +
+    '2순위: 직접 참조의 유사어/동의어 변형 (운영자→운용자, 매뉴얼→가이드)\n' +
+    '3순위: 항목명 기반 검색\n' +
+    '4순위: 내용 기반 검색 (기능/절차 키워드)\n' +
+    '5순위: 영문 표현';
 
   var responseText = callGeminiApi(prompt, apiKey);
-  return parseJsonObject(responseText);
+  var result = parseJsonObject(responseText);
+
+  // 직접 참조가 있으면 searchQueries 최상위에 추가 (중복 방지)
+  if (result && directRefs.length > 0) {
+    var existing = result.searchQueries || [];
+    directRefs.forEach(function(ref) {
+      if (existing.indexOf(ref) === -1) {
+        existing.unshift(ref);
+      }
+    });
+    result.searchQueries = existing;
+    result.directReferences = (result.directReferences || []).concat(directRefs);
+  }
+
+  return result;
+}
+
+/**
+ * 항목 내용에서 다른 문서를 직접 참조하는 표현을 추출한다.
+ * 패턴: "XXX 별도 존재", "XXX 참조", "XXX 참고", "XXX에 기술", "XXX 문서"
+ */
+function extractDirectReferences(content) {
+  if (!content) return [];
+  var text = String(content);
+  var refs = [];
+
+  // "XXX 별도 존재" / "XXX 별도 관리" / "XXX 별도 작성"
+  var patterns = [
+    /([가-힣A-Za-z0-9_\s]{2,20})\s*(?:별도\s*존재|별도\s*관리|별도\s*작성)/g,
+    /([가-힣A-Za-z0-9_\s]{2,20})\s*(?:참조|참고|참조\s*바람)/g,
+    /([가-힣A-Za-z0-9_\s]{2,20})\s*(?:에\s*기술|에\s*명시|에\s*정의)/g,
+    /([가-힣A-Za-z0-9_\s]{2,20})\s*(?:문서\s*확인|문서\s*참고)/g
+  ];
+
+  patterns.forEach(function(pattern) {
+    var match;
+    while ((match = pattern.exec(text)) !== null) {
+      var ref = match[1].trim();
+      if (ref.length >= 2 && refs.indexOf(ref) === -1) {
+        refs.push(ref);
+      }
+    }
+  });
+
+  return refs;
 }
 
 // ============================
@@ -135,6 +193,12 @@ function multiStrategySearch(context, folderIds) {
     }
   }
 
+  // 전략 0 (최우선): 직접 참조된 문서명으로 파일명 검색
+  (context.directReferences || []).forEach(function(ref) {
+    var files = searchDriveByName(ref, folderIds);
+    files.forEach(addFile);
+  });
+
   // 전략 1: 검색 쿼리로 fullText 검색
   (context.searchQueries || []).forEach(function(query) {
     var files = searchDriveFullText(query, folderIds);
@@ -150,8 +214,10 @@ function multiStrategySearch(context, folderIds) {
   // 전략 3: 유사어로 추가 검색 (아직 후보가 적으면)
   if (allFiles.length < 5) {
     (context.relatedTerms || []).forEach(function(term) {
-      var files = searchDriveFullText(term, folderIds);
+      var files = searchDriveByName(term, folderIds);
       files.forEach(addFile);
+      var files2 = searchDriveFullText(term, folderIds);
+      files2.forEach(addFile);
     });
   }
 
@@ -178,8 +244,12 @@ function evaluateWithContext(itemContent, context, candidates, apiKey) {
     '1. 문서의 목적이 항목의 요구와 일치하는가?\n' +
     '2. 파일명이 항목이 요구하는 산출물 유형을 나타내는가?\n' +
     '3. 파일 유형(Docs/Sheets/Slides/PDF)이 산출물 형식에 적합한가?\n\n' +
-    '단순 키워드 포함 여부가 아닌, 문맥적 의미를 기준으로 판단하세요.\n' +
-    '예: "테스트 계획" 항목에 "테스트 결과 보고서"는 관련은 있지만 다른 산출물입니다.\n\n' +
+    '=== 중요 판단 규칙 ===\n' +
+    '- **유사어는 동일**: 운영자=운용자=관리자, 매뉴얼=가이드=안내서=지침서\n' +
+    '- **포함 관계 인정**: "관리자 상세 매뉴얼"의 산출물로 "운용자 매뉴얼"은 적합 (같은 역할의 다른 표현)\n' +
+    '- **1-2글자 차이는 동일 문서로 판단**: 운영자/운용자, 사용자/이용자\n' +
+    '- 단순 키워드 포함이 아닌, 문맥적 의미를 기준으로 판단하세요.\n' +
+    '- "테스트 계획" 항목에 "테스트 결과 보고서"는 관련은 있지만 다른 산출물입니다.\n\n' +
     '=== 매뉴얼 항목 ===\n' +
     String(itemContent) + '\n\n' +
     '=== AI 분석 결과 ===\n' +
@@ -348,16 +418,25 @@ function batchAnalyzeContextWithPlan(items, matchingPlan, apiKey) {
   }
 
   var requests = items.map(function(itemContent) {
+    var directRefs = extractDirectReferences(itemContent);
+    var refHint = directRefs.length > 0
+      ? '\n감지된 직접 참조: ' + directRefs.join(', ') + ' — 이 문서명과 유사어를 검색 쿼리 최상위에 배치.\n'
+      : '';
+
     var prompt =
       '당신은 프로젝트 산출물 문서 전문가입니다.\n\n' +
       planContext +
       '위 프로젝트의 매뉴얼 항목을 분석하세요.\n' +
-      '항목: ' + String(itemContent) + '\n\n' +
+      '항목: ' + String(itemContent) + '\n' + refHint + '\n' +
+      '규칙:\n' +
+      '- "XXX 별도 존재/참조/참고" 표현이 있으면 해당 문서명을 최우선 검색 쿼리로\n' +
+      '- 유사어 필수 생성: 운영자/운용자/관리자, 매뉴얼/가이드/안내서/지침서, 띄어쓰기 변형\n' +
+      '- 검색 쿼리 7개 이상\n\n' +
       'JSON 응답:\n' +
       '{"documentType":"산출물 유형","purpose":"목적",' +
-      '"searchQueries":["쿼리1","쿼리2","쿼리3","쿼리4","쿼리5"],' +
-      '"fileNamePatterns":["패턴1","패턴2"],"relatedTerms":["유사어1","유사어2"]}\n\n' +
-      '프로젝트 도메인과 명명 규칙을 고려하여 현실적인 검색 쿼리를 생성하세요.';
+      '"directReferences":["직접 언급된 문서명"],' +
+      '"searchQueries":["쿼리1(직접참조)","쿼리2(유사어)","쿼리3","쿼리4","쿼리5","쿼리6","쿼리7"],' +
+      '"fileNamePatterns":["패턴1","패턴2","패턴3"],"relatedTerms":["유사어1","유사어2","유사어3","유사어4"]}';
 
     return {
       url: url,
