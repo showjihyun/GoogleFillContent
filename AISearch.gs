@@ -272,6 +272,122 @@ function searchByAIWithContext(itemContent, folderIds, cachedContext) {
 }
 
 // ============================
+// 시트 전체 분석 → 매칭 계획 수립
+// ============================
+
+/**
+ * 시트의 전체 항목을 Gemini에 전달하여 매칭 계획을 수립한다.
+ * - 프로젝트 도메인/유형 파악
+ * - 항목 간 관계 이해 (생명주기, 그룹핑)
+ * - 공통 검색 전략 수립
+ */
+function createMatchingPlan(allItems, apiKey) {
+  var itemList = allItems.map(function(item, i) {
+    return (i + 1) + '. ' + (item || '(빈 항목)').substring(0, 100);
+  }).join('\n');
+
+  // 항목이 너무 많으면 앞 50개 + 뒤 10개만
+  if (allItems.length > 60) {
+    var front = allItems.slice(0, 50).map(function(item, i) {
+      return (i + 1) + '. ' + (item || '').substring(0, 100);
+    }).join('\n');
+    var back = allItems.slice(-10).map(function(item, i) {
+      return (allItems.length - 10 + i + 1) + '. ' + (item || '').substring(0, 100);
+    }).join('\n');
+    itemList = front + '\n... (중간 ' + (allItems.length - 60) + '개 생략) ...\n' + back;
+  }
+
+  var prompt =
+    '당신은 프로젝트 산출물 관리 전문가입니다.\n\n' +
+    '아래는 솔루션 상용화 매뉴얼의 전체 항목 목록입니다.\n' +
+    '이 시트 전체를 분석하여 매칭 계획을 수립하세요.\n\n' +
+    '=== 전체 항목 (' + allItems.length + '개) ===\n' +
+    itemList + '\n\n' +
+    '다음을 분석하여 JSON으로 응답하세요:\n' +
+    '{\n' +
+    '  "domain": "이 매뉴얼이 속한 도메인 (예: SW개발, SI프로젝트, 솔루션상용화 등)",\n' +
+    '  "projectType": "프로젝트 유형 (예: 웹앱, 모바일앱, 시스템통합 등)",\n' +
+    '  "lifecycle": "산출물이 따르는 생명주기 (예: 기획→분석→설계→개발→테스트→배포)",\n' +
+    '  "groups": [\n' +
+    '    {\n' +
+    '      "name": "그룹명 (예: 요구사항 관련, 설계 관련, 테스트 관련)",\n' +
+    '      "itemIndices": [1, 2, 3],\n' +
+    '      "commonSearchTerms": ["공통 검색어1", "검색어2"],\n' +
+    '      "expectedDocTypes": ["예상 문서 유형1", "유형2"]\n' +
+    '    }\n' +
+    '  ],\n' +
+    '  "namingConventions": ["이 프로젝트에서 예상되는 파일 명명 규칙"],\n' +
+    '  "searchStrategy": "전체 검색 전략 요약 (한 줄)"\n' +
+    '}\n\n' +
+    '그룹은 관련 항목끼리 묶어주세요. 같은 그룹의 항목들은 비슷한 검색 전략을 공유합니다.';
+
+  var responseText = callGeminiApi(prompt, apiKey);
+  return parseJsonObject(responseText);
+}
+
+// ============================
+// 매칭 계획 기반 배치 문맥 분석
+// ============================
+
+/**
+ * 매칭 계획을 기반으로 항목별 문맥 분석을 수행한다.
+ * 계획의 domain, projectType, groups 정보를 프롬프트에 포함하여
+ * 각 항목의 문맥을 더 정확하게 분석한다.
+ */
+function batchAnalyzeContextWithPlan(items, matchingPlan, apiKey) {
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+    GEMINI_MODEL + ':generateContent?key=' + apiKey;
+
+  var planContext = '';
+  if (matchingPlan && matchingPlan.domain) {
+    planContext =
+      '이 매뉴얼의 도메인: ' + matchingPlan.domain + '\n' +
+      '프로젝트 유형: ' + (matchingPlan.projectType || '알 수 없음') + '\n' +
+      '생명주기: ' + (matchingPlan.lifecycle || '알 수 없음') + '\n' +
+      '명명 규칙: ' + (matchingPlan.namingConventions || []).join(', ') + '\n\n';
+  }
+
+  var requests = items.map(function(itemContent) {
+    var prompt =
+      '당신은 프로젝트 산출물 문서 전문가입니다.\n\n' +
+      planContext +
+      '위 프로젝트의 매뉴얼 항목을 분석하세요.\n' +
+      '항목: ' + String(itemContent) + '\n\n' +
+      'JSON 응답:\n' +
+      '{"documentType":"산출물 유형","purpose":"목적",' +
+      '"searchQueries":["쿼리1","쿼리2","쿼리3","쿼리4","쿼리5"],' +
+      '"fileNamePatterns":["패턴1","패턴2"],"relatedTerms":["유사어1","유사어2"]}\n\n' +
+      '프로젝트 도메인과 명명 규칙을 고려하여 현실적인 검색 쿼리를 생성하세요.';
+
+    return {
+      url: url,
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 1024, responseMimeType: 'application/json' }
+      }),
+      muteHttpExceptions: true
+    };
+  });
+
+  var responses = UrlFetchApp.fetchAll(requests);
+
+  return responses.map(function(response) {
+    try {
+      if (response.getResponseCode() !== 200) return null;
+      var json = JSON.parse(response.getContentText());
+      var text = json.candidates && json.candidates[0] &&
+        json.candidates[0].content && json.candidates[0].content.parts &&
+        json.candidates[0].content.parts[0] && json.candidates[0].content.parts[0].text;
+      return text ? parseJsonObject(text) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+}
+
+// ============================
 // 배치 AI 처리 (비동기 병렬)
 // ============================
 

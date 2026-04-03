@@ -41,7 +41,8 @@ function processItems() {
     saveState(state);
   }
 
-  // Phase 1.5: AI 배치 문맥 분석 (ai, keyword_then_ai 모드만)
+  // Phase 1.5: 시트 전체 분석 → 매칭 계획 수립 → 항목별 문맥 분석
+  // (ai, keyword_then_ai 모드만)
   if (state.phase === 'PROCESSING' && !state.batchContextDone &&
       (state.config.matchMode === 'ai' || state.config.matchMode === 'keyword_then_ai')) {
     var apiKey = getGeminiApiKey();
@@ -49,7 +50,36 @@ function processItems() {
       var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
       var config = state.config;
       var searchColIndices = config.searchColIndices || [config.searchColIndex];
-      var batchSize = 5; // 한 번에 5개씩 병렬 분석
+
+      // Step A: 시트 전체 항목을 먼저 읽고 매칭 계획 수립 (1회만)
+      if (!state.matchingPlan) {
+        var allItems = [];
+        for (var r = 0; r < state.totalItems; r++) {
+          var row = r + 2;
+          var parts = [];
+          searchColIndices.forEach(function(colIdx) {
+            var val = sheet.getRange(row, colIdx + 1).getValue();
+            if (val && String(val).trim() !== '') parts.push(String(val).trim());
+          });
+          allItems.push(parts.join(' '));
+        }
+
+        try {
+          state.matchingPlan = createMatchingPlan(allItems, apiKey);
+        } catch (e) {
+          state.matchingPlan = { domain: 'unknown', groups: [], strategy: 'individual' };
+          logError({ itemName: 'MatchingPlan', error: '매칭 계획 수립 실패: ' + e.message, matchMode: 'plan' });
+        }
+        saveState(state);
+
+        if (Date.now() - startTime > TIME_LIMIT_MS) {
+          scheduleContinuation(60000);
+          return;
+        }
+      }
+
+      // Step B: 매칭 계획을 기반으로 항목별 문맥 분석 (배치)
+      var batchSize = 5;
       var startIdx = state.batchContextIndex || 0;
       var endIdx = Math.min(startIdx + batchSize, state.totalItems);
 
@@ -70,8 +100,7 @@ function processItems() {
       }
 
       if (itemContents.length > 0) {
-        // 병렬 문맥 분석 (UrlFetchApp.fetchAll)
-        var contexts = batchAnalyzeContext(itemContents, apiKey);
+        var contexts = batchAnalyzeContextWithPlan(itemContents, state.matchingPlan, apiKey);
         if (!state.contextCache) state.contextCache = {};
         contexts.forEach(function(ctx, i) {
           if (ctx) state.contextCache[String(itemIndices[i])] = ctx;
@@ -80,19 +109,16 @@ function processItems() {
 
       if (endIdx < state.totalItems) {
         state.batchContextIndex = endIdx;
+        saveState(state);
         if (Date.now() - startTime > TIME_LIMIT_MS) {
-          saveState(state);
           scheduleContinuation(60000);
           return;
         }
-        // 다음 배치 계속
-        saveState(state);
       } else {
         state.batchContextDone = true;
         saveState(state);
       }
 
-      // 시간 여유가 없으면 다음 continuation에서 처리 계속
       if (Date.now() - startTime > TIME_LIMIT_MS) {
         saveState(state);
         scheduleContinuation(60000);
