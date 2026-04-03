@@ -167,14 +167,33 @@ function processItem(itemContent, state, matchMode) {
       searchResult.fallback = true;
     }
   } else if (matchMode === 'keyword_then_ai') {
-    // 1차: 키워드 검색
-    searchResult = searchByKeyword(itemContent, folderIds);
-    // 2차: 키워드로 매칭 실패 시 AI로 재시도
-    if (!searchResult.files || searchResult.files.length === 0) {
+    // 1차: 키워드로 후보 수집 (커버리지 검증 없이 Drive 검색만)
+    var keywordCandidates = searchByKeywordRaw(itemContent, folderIds);
+
+    if (keywordCandidates.files && keywordCandidates.files.length > 0) {
+      // 2차: 키워드 후보를 AI가 관련도 검증
+      searchResult = verifyWithAI(itemContent, keywordCandidates);
+      if (searchResult.files && searchResult.files.length > 0) {
+        searchResult.verifiedByAI = true;
+      } else {
+        // AI 검증 통과 후보 없음 → AI로 전체 재검색
+        var aiResult = searchByAI(itemContent, folderIds);
+        if (aiResult.error !== 'AI_FALLBACK' && aiResult.files && aiResult.files.length > 0) {
+          searchResult = aiResult;
+          searchResult.escalatedToAI = true;
+        } else {
+          searchResult = keywordCandidates;
+          searchResult.aiVerifyFailed = true;
+        }
+      }
+    } else {
+      // 키워드 후보 0건 → AI로 전체 검색
       var aiResult = searchByAI(itemContent, folderIds);
       if (aiResult.error !== 'AI_FALLBACK' && aiResult.files && aiResult.files.length > 0) {
         searchResult = aiResult;
         searchResult.escalatedToAI = true;
+      } else {
+        searchResult = keywordCandidates;
       }
     }
   } else {
@@ -228,8 +247,16 @@ function processItem(itemContent, state, matchMode) {
     remarks = (remarks ? remarks + ' | ' : '') + 'AI 매칭 실패, 키워드 매칭으로 대체';
   }
 
+  if (searchResult.verifiedByAI) {
+    remarks = (remarks ? remarks + ' | ' : '') + '키워드 후보 → AI 검증 통과';
+  }
+
   if (searchResult.escalatedToAI) {
-    remarks = (remarks ? remarks + ' | ' : '') + '키워드 실패 → AI 재시도로 매칭';
+    remarks = (remarks ? remarks + ' | ' : '') + '키워드 실패 → AI 전체 재검색으로 매칭';
+  }
+
+  if (searchResult.aiVerifyFailed) {
+    remarks = (remarks ? remarks + ' | ' : '') + 'AI 검증 미통과 — 키워드 매칭 결과 사용';
   }
 
   // 커버리지 + 페이지 정보를 비고에 추가

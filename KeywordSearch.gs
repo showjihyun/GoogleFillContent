@@ -39,6 +39,92 @@ function searchByKeyword(itemContent, folderIds) {
   return { files: verifiedFiles, keywords: keywords, searchTerms: searchTerms };
 }
 
+/**
+ * 키워드 검색으로 후보만 수집 (커버리지 검증 생략).
+ * keyword_then_ai 모드에서 사용 — AI가 최종 판정하므로 넓게 수집.
+ */
+function searchByKeywordRaw(itemContent, folderIds) {
+  var keywords = extractKeywordsFromContent(itemContent);
+  if (keywords.length === 0) {
+    return { files: [], keywords: [], error: '키워드를 추출할 수 없습니다' };
+  }
+
+  var allFiles = [];
+  for (var k = 0; k < keywords.length; k++) {
+    var keyword = keywords[k].trim();
+    if (!keyword || keyword.length < 2) continue;
+    var files = searchDriveFullText(keyword, folderIds);
+    files.forEach(function(file) {
+      if (!allFiles.some(function(f) { return f.id === file.id; })) {
+        allFiles.push(file);
+      }
+    });
+  }
+
+  return { files: allFiles, keywords: keywords };
+}
+
+/**
+ * 키워드로 수집한 후보를 AI(Gemini)로 관련도 검증.
+ * 70점 이상 + 커버리지 80% 통과 파일만 반환.
+ */
+function verifyWithAI(itemContent, keywordResult) {
+  var apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    // API 키 없으면 커버리지 검증만으로 fallback
+    var searchTerms = extractSearchTerms(itemContent);
+    var verified = [];
+    (keywordResult.files || []).forEach(function(file) {
+      var result = calculateCoverage(file.id, searchTerms);
+      if (result.coverage >= COVERAGE_THRESHOLD) {
+        file._coverage = result;
+        verified.push(file);
+      }
+    });
+    return { files: verified, keywords: keywordResult.keywords, searchTerms: searchTerms, fallback: true };
+  }
+
+  var candidates = (keywordResult.files || []).slice(0, 10);
+  if (candidates.length === 0) {
+    return { files: [], keywords: keywordResult.keywords };
+  }
+
+  var scored;
+  try {
+    scored = evaluateRelevanceWithGemini(itemContent, candidates, apiKey);
+  } catch (e) {
+    // AI 평가 실패 → 커버리지만으로 판정
+    var searchTerms = extractSearchTerms(itemContent);
+    var verified = [];
+    candidates.forEach(function(file) {
+      var result = calculateCoverage(file.id, searchTerms);
+      if (result.coverage >= COVERAGE_THRESHOLD) {
+        file._coverage = result;
+        verified.push(file);
+      }
+    });
+    return { files: verified, keywords: keywordResult.keywords, searchTerms: searchTerms, message: 'AI 검증 실패, 커버리지만 사용' };
+  }
+
+  var matched = scored.filter(function(s) { return s.score >= RELEVANCE_THRESHOLD; });
+
+  // AI 통과 후보에 커버리지 + 페이지 감지
+  var searchTerms = extractSearchTerms(itemContent);
+  var verifiedFiles = [];
+  matched.forEach(function(s) {
+    var coverageResult = calculateCoverage(s.file.id, searchTerms);
+    s.file._coverage = coverageResult;
+    verifiedFiles.push(s.file);
+  });
+
+  return {
+    files: verifiedFiles,
+    keywords: keywordResult.keywords,
+    scores: scored,
+    searchTerms: searchTerms
+  };
+}
+
 function extractKeywordsFromContent(content) {
   if (!content) return [];
   var text = String(content).trim();
