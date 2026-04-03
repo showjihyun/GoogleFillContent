@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Google Sans', Roboto, Arial, sans-serif;
+    font-size: 13px;
+    color: #202124;
+    padding: 12px;
+    background: #fff;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+  .header h2 { font-size: 16px; font-weight: 500; }
+  .help-btn {
+    background: none; border: none; cursor: pointer;
+    color: #5f6368; font-size: 18px; padding: 4px;
+    border-radius: 50%;
+  }
+  .help-btn:hover { background: #f1f3f4; }
+
+  /* Welcome Card */
+  .welcome-card {
+    background: #e8f0fe;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .welcome-card h3 { font-size: 13px; color: #1a73e8; margin-bottom: 8px; }
+  .welcome-card ol { padding-left: 20px; }
+  .welcome-card li { margin-bottom: 4px; }
+  .welcome-dismiss {
+    display: flex; align-items: center; gap: 4px;
+    margin-top: 8px; font-size: 11px; color: #5f6368;
+  }
+
+  /* Section */
+  .section-label {
+    font-size: 11px; font-weight: 500; color: #5f6368;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin: 12px 0 6px; padding-bottom: 4px;
+    border-bottom: 1px solid #f1f3f4;
+  }
+
+  /* Form elements */
+  .field { margin-bottom: 10px; }
+  .field label {
+    display: block; font-size: 12px; font-weight: 500;
+    color: #3c4043; margin-bottom: 3px;
+  }
+  select, input[type="text"] {
+    width: 100%; padding: 7px 8px; font-size: 13px;
+    border: 1px solid #dadce0; border-radius: 4px;
+    background: #fff; color: #202124;
+    outline: none; transition: border-color 0.2s;
+  }
+  select:focus, input[type="text"]:focus {
+    border-color: #1a73e8;
+    box-shadow: 0 0 0 2px rgba(26,115,232,0.2);
+  }
+
+  /* Recent folders */
+  .recent-folders { margin-top: 4px; }
+  .recent-item {
+    display: flex; align-items: center; gap: 4px;
+    padding: 3px 0; font-size: 11px; color: #1a73e8;
+    cursor: pointer; text-decoration: none;
+  }
+  .recent-item:hover { text-decoration: underline; }
+
+  /* Radio */
+  .radio-group {
+    display: flex; gap: 16px; margin-top: 4px;
+  }
+  .radio-group label {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 13px; font-weight: 400; cursor: pointer;
+  }
+
+  /* Primary button */
+  .btn-primary {
+    width: 100%; padding: 10px; margin: 12px 0;
+    background: #1a73e8; color: #fff;
+    border: none; border-radius: 4px;
+    font-size: 14px; font-weight: 500;
+    cursor: pointer; transition: background 0.2s;
+  }
+  .btn-primary:hover { background: #1557b0; }
+  .btn-primary:disabled { background: #dadce0; color: #80868b; cursor: default; }
+
+  /* Cancel button */
+  .btn-cancel {
+    width: 100%; padding: 8px; margin-top: 6px;
+    background: #fff; color: #d93025;
+    border: 1px solid #d93025; border-radius: 4px;
+    font-size: 13px; cursor: pointer;
+  }
+  .btn-cancel:hover { background: #fce8e6; }
+
+  /* Secondary buttons */
+  .btn-row { display: flex; gap: 8px; margin-top: 8px; }
+  .btn-secondary {
+    flex: 1; padding: 7px; text-align: center;
+    background: #f1f3f4; color: #3c4043;
+    border: none; border-radius: 4px;
+    font-size: 12px; cursor: pointer;
+  }
+  .btn-secondary:hover { background: #e8eaed; }
+
+  /* Progress */
+  .progress-area { margin-top: 8px; }
+  .progress-bar-container {
+    width: 100%; height: 8px; background: #e8eaed;
+    border-radius: 4px; overflow: hidden; margin: 6px 0;
+  }
+  .progress-bar-fill {
+    height: 100%; background: #1a73e8; border-radius: 4px;
+    transition: width 0.3s ease;
+  }
+  .progress-text {
+    font-size: 12px; color: #5f6368; text-align: center;
+  }
+  .progress-eta {
+    font-size: 11px; color: #80868b; text-align: center; margin-top: 2px;
+  }
+
+  /* Result banners */
+  .result-banner {
+    border-radius: 6px; padding: 10px; margin-top: 8px;
+    font-size: 12px; line-height: 1.6;
+  }
+  .result-success { background: #e6f4ea; color: #137333; }
+  .result-warning { background: #fef7e0; color: #b06000; }
+  .result-error { background: #fce8e6; color: #c5221f; }
+
+  .result-line {
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  /* Error list */
+  .error-list {
+    margin-top: 6px; padding: 6px 8px;
+    background: #f8f9fa; border-radius: 4px;
+    font-size: 11px; max-height: 120px; overflow-y: auto;
+  }
+  .error-list li { margin-bottom: 3px; list-style: none; }
+
+  .hidden { display: none; }
+
+  /* Validation error */
+  .field-error {
+    font-size: 11px; color: #d93025; margin-top: 2px;
+  }
+
+  /* Multi-select checkboxes */
+  .checkbox-group {
+    max-height: 120px; overflow-y: auto;
+    border: 1px solid #dadce0; border-radius: 4px;
+    padding: 4px 0;
+  }
+  .checkbox-group label {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 8px; font-size: 12px; font-weight: 400;
+    cursor: pointer;
+  }
+  .checkbox-group label:hover { background: #f1f3f4; }
+  .checkbox-group input[type="checkbox"] { margin: 0; }
+  .selected-count {
+    font-size: 11px; color: #5f6368; margin-top: 3px;
+  }
+</style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <h2>FillContent</h2>
+    <button class="help-btn" onclick="toggleHelp()" title="도움말" aria-label="도움말">?</button>
+  </div>
+
+  <!-- Welcome Card -->
+  <div id="welcomeCard" class="welcome-card hidden">
+    <h3>시작하기</h3>
+    <ol>
+      <li><b>컬럼 선택</b> — 검색 기준, 결과 기입, 비고 컬럼을 선택하세요</li>
+      <li><b>폴더 지정</b> — 구글 드라이브 폴더 URL을 붙여넣으세요</li>
+      <li><b>검색 시작</b> — 키워드 또는 AI 모드로 산출물을 자동 매칭합니다</li>
+    </ol>
+    <div class="welcome-dismiss">
+      <input type="checkbox" id="dismissWelcome" onchange="dismissWelcome()">
+      <label for="dismissWelcome">다시 보지 않기</label>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="section-label">설정</div>
+
+  <div class="field">
+    <label>검색 기준 컬럼 <span style="font-weight:400; color:#5f6368">(복수 선택 가능)</span></label>
+    <div id="searchColGroup" class="checkbox-group" role="group" aria-label="검색 기준 컬럼 선택"></div>
+    <div id="searchColCount" class="selected-count"></div>
+    <div id="searchColError" class="field-error hidden"></div>
+  </div>
+
+  <div class="field">
+    <label for="resultCol">결과 기입 컬럼</label>
+    <select id="resultCol" aria-label="결과 기입 컬럼 선택"></select>
+  </div>
+
+  <div class="field">
+    <label for="remarksCol">비고 컬럼</label>
+    <select id="remarksCol" aria-label="비고 컬럼 선택"></select>
+  </div>
+
+  <div class="field">
+    <label for="folderUrl">시작 폴더</label>
+    <input type="text" id="folderUrl" placeholder="구글 드라이브 폴더 URL 붙여넣기"
+           aria-label="구글 드라이브 폴더 URL">
+    <div id="folderStatus" class="hidden" style="font-size:11px; margin-top:3px;"></div>
+    <div id="folderError" class="field-error hidden"></div>
+    <div id="recentFolders" class="recent-folders"></div>
+  </div>
+
+  <div class="field">
+    <label>매칭 모드</label>
+    <div class="radio-group">
+      <label><input type="radio" name="matchMode" value="keyword" checked> 키워드</label>
+      <label><input type="radio" name="matchMode" value="ai"> AI</label>
+    </div>
+  </div>
+
+  <!-- Search Button -->
+  <button id="searchBtn" class="btn-primary" onclick="startSearch()">
+    🔍 검색 시작
+  </button>
+
+  <!-- Result Area -->
+  <div id="resultArea" class="hidden">
+    <div class="section-label">결과</div>
+
+    <!-- Progress -->
+    <div id="progressArea" class="progress-area hidden">
+      <div class="progress-bar-container">
+        <div id="progressBar" class="progress-bar-fill" style="width:0%"
+             role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+      </div>
+      <div id="progressText" class="progress-text">준비 중...</div>
+      <div id="progressEta" class="progress-eta"></div>
+      <button class="btn-cancel" onclick="cancelSearch()">취소</button>
+    </div>
+
+    <!-- Success Result -->
+    <div id="resultSuccess" class="result-banner result-success hidden" role="alert">
+      <div class="result-line">✅ <span id="successCount">0</span>개 매칭 성공</div>
+      <div class="result-line">⚠️ <span id="multiCount">0</span>개 다중 후보</div>
+      <div class="result-line">❌ <span id="failCountDisplay">0</span>개 실패</div>
+    </div>
+
+    <!-- Error Result -->
+    <div id="resultError" class="result-banner result-error hidden" role="alert">
+      <div id="errorMessage"></div>
+      <button class="btn-secondary" onclick="startSearch()" style="margin-top:6px;">재시도</button>
+    </div>
+
+    <!-- Fail Details -->
+    <div id="failDetails" class="hidden">
+      <button class="btn-secondary" onclick="toggleFailList()" style="width:100%; margin-top:6px;">
+        실패 항목 보기
+      </button>
+      <ul id="failList" class="error-list hidden"></ul>
+    </div>
+  </div>
+
+  <!-- Bottom Actions -->
+  <div class="btn-row">
+    <button class="btn-secondary" onclick="openLogSheet()">매칭 로그</button>
+    <button class="btn-secondary" onclick="openAutoUpdate()">자동갱신 ⚙</button>
+  </div>
+
+<script>
+  var pollInterval = null;
+  var searchStartTime = null;
+
+  // --- Init ---
+  document.addEventListener('DOMContentLoaded', function() {
+    loadHeaders();
+    loadRecentFolders();
+    checkWelcome();
+    checkExistingProgress();
+  });
+
+  function loadHeaders() {
+    google.script.run.withSuccessHandler(function(headers) {
+      // 검색 기준: 체크박스 복수 선택
+      var group = document.getElementById('searchColGroup');
+      group.innerHTML = '';
+      headers.forEach(function(h, i) {
+        var label = document.createElement('label');
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = i;
+        cb.name = 'searchCols';
+        cb.addEventListener('change', updateSearchColCount);
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(h));
+        group.appendChild(label);
+      });
+
+      // 결과/비고: 단일 드롭다운
+      var dropdowns = ['resultCol', 'remarksCol'];
+      dropdowns.forEach(function(colId) {
+        var sel = document.getElementById(colId);
+        sel.innerHTML = '<option value="">-- 선택 --</option>';
+        headers.forEach(function(h, i) {
+          var opt = document.createElement('option');
+          opt.value = i;
+          opt.textContent = h;
+          sel.appendChild(opt);
+        });
+      });
+    }).getSheetHeaders();
+  }
+
+  function updateSearchColCount() {
+    var checked = document.querySelectorAll('input[name="searchCols"]:checked');
+    var countEl = document.getElementById('searchColCount');
+    if (checked.length > 0) {
+      countEl.textContent = checked.length + '개 컬럼 선택됨';
+    } else {
+      countEl.textContent = '';
+    }
+  }
+
+  function getSelectedSearchCols() {
+    var checked = document.querySelectorAll('input[name="searchCols"]:checked');
+    var indices = [];
+    checked.forEach(function(cb) { indices.push(parseInt(cb.value)); });
+    return indices;
+  }
+
+  function loadRecentFolders() {
+    google.script.run.withSuccessHandler(function(folders) {
+      var container = document.getElementById('recentFolders');
+      if (!folders || folders.length === 0) {
+        container.innerHTML = '';
+        return;
+      }
+      container.innerHTML = folders.map(function(f) {
+        return '<a class="recent-item" onclick="useRecentFolder(\'' +
+               f.url.replace(/'/g, "\\'") + '\')">📁 ' + f.name + '</a>';
+      }).join('');
+    }).getRecentFolders();
+  }
+
+  function useRecentFolder(url) {
+    document.getElementById('folderUrl').value = url;
+    validateFolder();
+  }
+
+  function checkWelcome() {
+    google.script.run.withSuccessHandler(function(seen) {
+      if (!seen) {
+        document.getElementById('welcomeCard').classList.remove('hidden');
+      }
+    }).isWelcomeSeen();
+  }
+
+  function dismissWelcome() {
+    document.getElementById('welcomeCard').classList.add('hidden');
+    google.script.run.setWelcomeSeen();
+  }
+
+  function toggleHelp() {
+    var card = document.getElementById('welcomeCard');
+    card.classList.toggle('hidden');
+  }
+
+  // --- Validation ---
+  function validateFolder() {
+    var url = document.getElementById('folderUrl').value.trim();
+    if (!url) return;
+    var status = document.getElementById('folderStatus');
+    var error = document.getElementById('folderError');
+    status.textContent = '확인 중...';
+    status.style.color = '#5f6368';
+    status.classList.remove('hidden');
+    error.classList.add('hidden');
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (result.success) {
+          status.textContent = '✓ ' + result.folderName;
+          status.style.color = '#137333';
+        } else {
+          status.classList.add('hidden');
+          error.textContent = result.error;
+          error.classList.remove('hidden');
+        }
+      })
+      .withFailureHandler(function(e) {
+        status.classList.add('hidden');
+        error.textContent = '검증 실패: ' + e.message;
+        error.classList.remove('hidden');
+      })
+      .parseFolderUrl(url);
+  }
+
+  document.getElementById('folderUrl').addEventListener('blur', validateFolder);
+
+  // --- Search ---
+  function startSearch() {
+    var searchCols = getSelectedSearchCols();
+    var resultCol = document.getElementById('resultCol').value;
+    var remarksCol = document.getElementById('remarksCol').value;
+    var folderUrl = document.getElementById('folderUrl').value.trim();
+    var matchMode = document.querySelector('input[name="matchMode"]:checked').value;
+
+    // Validation
+    var valid = true;
+    if (searchCols.length === 0) {
+      showFieldError('searchColError', '검색 기준 컬럼을 1개 이상 선택하세요');
+      valid = false;
+    } else hideFieldError('searchColError');
+    if (!folderUrl) {
+      showFieldError('folderError', '폴더 URL을 입력하세요');
+      valid = false;
+    } else hideFieldError('folderError');
+    if (!valid) return;
+
+    var config = {
+      searchColIndices: searchCols,
+      resultColIndex: parseInt(resultCol),
+      remarksColIndex: remarksCol ? parseInt(remarksCol) : -1,
+      folderUrl: folderUrl,
+      matchMode: matchMode
+    };
+
+    setSearching(true);
+    searchStartTime = Date.now();
+
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (result.success) {
+          startPolling();
+        } else {
+          setSearching(false);
+          showError(result.error);
+        }
+      })
+      .withFailureHandler(function(e) {
+        setSearching(false);
+        showError(e.message);
+      })
+      .startSearch(config);
+  }
+
+  function cancelSearch() {
+    google.script.run.cancelSearch();
+  }
+
+  // --- Progress Polling ---
+  function startPolling() {
+    if (pollInterval) clearInterval(pollInterval);
+    pollInterval = setInterval(pollProgress, 3000);
+    pollProgress();
+  }
+
+  function stopPolling() {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+
+  function pollProgress() {
+    google.script.run.withSuccessHandler(function(prog) {
+      if (!prog || prog.phase === 'IDLE') return;
+
+      if (prog.phase === 'DONE') {
+        stopPolling();
+        setSearching(false);
+        showResults(prog);
+        return;
+      }
+
+      if (prog.phase === 'ERROR') {
+        stopPolling();
+        setSearching(false);
+        showError(prog.errors && prog.errors.length > 0 ? prog.errors[prog.errors.length - 1] : '알 수 없는 에러');
+        return;
+      }
+
+      // Update progress
+      var pct = prog.totalItems > 0 ? Math.round((prog.processedCount / prog.totalItems) * 100) : 0;
+      document.getElementById('progressBar').style.width = pct + '%';
+      document.getElementById('progressBar').setAttribute('aria-valuenow', pct);
+
+      var phaseText = prog.phase === 'TREE_COLLECTION' ? '폴더 탐색 중...' :
+                      prog.processedCount + '/' + prog.totalItems + ' 처리중';
+      document.getElementById('progressText').textContent = phaseText;
+
+      if (prog.processedCount > 0 && searchStartTime) {
+        var elapsed = (Date.now() - searchStartTime) / 1000;
+        var rate = prog.processedCount / elapsed;
+        var remaining = (prog.totalItems - prog.processedCount) / rate;
+        var etaMin = Math.ceil(remaining / 60);
+        document.getElementById('progressEta').textContent =
+          '예상 완료: ~' + (etaMin > 0 ? etaMin + '분' : '1분 미만');
+      }
+    }).getProgress();
+  }
+
+  function checkExistingProgress() {
+    google.script.run.withSuccessHandler(function(prog) {
+      if (prog && prog.phase && prog.phase !== 'IDLE' && prog.phase !== 'DONE') {
+        setSearching(true);
+        searchStartTime = Date.now();
+        startPolling();
+      }
+    }).getProgress();
+  }
+
+  // --- UI State ---
+  function setSearching(isSearching) {
+    document.getElementById('searchBtn').disabled = isSearching;
+    document.getElementById('resultArea').classList.remove('hidden');
+    document.getElementById('progressArea').classList.toggle('hidden', !isSearching);
+    document.getElementById('resultSuccess').classList.add('hidden');
+    document.getElementById('resultError').classList.add('hidden');
+    document.getElementById('failDetails').classList.add('hidden');
+  }
+
+  function showResults(prog) {
+    document.getElementById('resultSuccess').classList.remove('hidden');
+    document.getElementById('successCount').textContent = prog.successCount || 0;
+    document.getElementById('multiCount').textContent = prog.multiMatchCount || 0;
+    document.getElementById('failCountDisplay').textContent = prog.failCount || 0;
+
+    if (prog.failCount > 0 && prog.errors && prog.errors.length > 0) {
+      document.getElementById('failDetails').classList.remove('hidden');
+      var list = document.getElementById('failList');
+      list.innerHTML = prog.errors.map(function(e) {
+        return '<li>• ' + e + '</li>';
+      }).join('');
+    }
+    loadRecentFolders();
+  }
+
+  function showError(msg) {
+    document.getElementById('resultError').classList.remove('hidden');
+    document.getElementById('errorMessage').textContent = msg;
+  }
+
+  function showFieldError(id, msg) {
+    var el = document.getElementById(id);
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  }
+  function hideFieldError(id) {
+    document.getElementById(id).classList.add('hidden');
+  }
+
+  function toggleFailList() {
+    document.getElementById('failList').classList.toggle('hidden');
+  }
+
+  function openLogSheet() {
+    google.script.run.withSuccessHandler(function() {
+      google.script.host.close();
+    }).withFailureHandler(function() {}).activateLogSheet();
+  }
+
+  function openAutoUpdate() {
+    google.script.run.showAutoUpdateSettings();
+  }
+</script>
+</body>
+</html>
