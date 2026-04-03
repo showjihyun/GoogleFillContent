@@ -235,12 +235,12 @@
   <div class="field">
     <label>매칭 모드</label>
     <div class="radio-group" style="flex-wrap: wrap; gap: 8px 16px;">
-      <label><input type="radio" name="matchMode" value="keyword" checked> 키워드</label>
+      <label><input type="radio" name="matchMode" value="ai" checked> AI (추천)</label>
       <label><input type="radio" name="matchMode" value="keyword_then_ai"> 키워드→AI</label>
-      <label><input type="radio" name="matchMode" value="ai"> AI</label>
+      <label><input type="radio" name="matchMode" value="keyword"> 키워드</label>
     </div>
     <div style="font-size:11px; color:#5f6368; margin-top:3px;">
-      키워드→AI: 키워드로 후보 수집 후 AI가 관련도 검증 (추천)
+      AI: 시트 전체 문맥을 파악하여 가장 정확하게 매칭 (Gemini API 키 필요)
     </div>
   </div>
 
