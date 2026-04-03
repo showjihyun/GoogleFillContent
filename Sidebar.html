@@ -234,9 +234,13 @@
 
   <div class="field">
     <label>매칭 모드</label>
-    <div class="radio-group">
+    <div class="radio-group" style="flex-wrap: wrap; gap: 8px 16px;">
       <label><input type="radio" name="matchMode" value="keyword" checked> 키워드</label>
+      <label><input type="radio" name="matchMode" value="keyword_then_ai"> 키워드→AI</label>
       <label><input type="radio" name="matchMode" value="ai"> AI</label>
+    </div>
+    <div style="font-size:11px; color:#5f6368; margin-top:3px;">
+      키워드→AI: 키워드로 먼저 검색, 실패 항목만 AI로 재시도
     </div>
   </div>
 

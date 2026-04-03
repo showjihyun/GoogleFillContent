@@ -166,6 +166,17 @@ function processItem(itemContent, state, matchMode) {
       searchResult = searchByKeyword(itemContent, folderIds);
       searchResult.fallback = true;
     }
+  } else if (matchMode === 'keyword_then_ai') {
+    // 1차: 키워드 검색
+    searchResult = searchByKeyword(itemContent, folderIds);
+    // 2차: 키워드로 매칭 실패 시 AI로 재시도
+    if (!searchResult.files || searchResult.files.length === 0) {
+      var aiResult = searchByAI(itemContent, folderIds);
+      if (aiResult.error !== 'AI_FALLBACK' && aiResult.files && aiResult.files.length > 0) {
+        searchResult = aiResult;
+        searchResult.escalatedToAI = true;
+      }
+    }
   } else {
     searchResult = searchByKeyword(itemContent, folderIds);
   }
@@ -215,6 +226,10 @@ function processItem(itemContent, state, matchMode) {
 
   if (searchResult.fallback) {
     remarks = (remarks ? remarks + ' | ' : '') + 'AI 매칭 실패, 키워드 매칭으로 대체';
+  }
+
+  if (searchResult.escalatedToAI) {
+    remarks = (remarks ? remarks + ' | ' : '') + '키워드 실패 → AI 재시도로 매칭';
   }
 
   // 커버리지 + 페이지 정보를 비고에 추가
