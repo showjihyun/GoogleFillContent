@@ -41,6 +41,69 @@ function processItems() {
     saveState(state);
   }
 
+  // Phase 1.5: AI 배치 문맥 분석 (ai, keyword_then_ai 모드만)
+  if (state.phase === 'PROCESSING' && !state.batchContextDone &&
+      (state.config.matchMode === 'ai' || state.config.matchMode === 'keyword_then_ai')) {
+    var apiKey = getGeminiApiKey();
+    if (apiKey) {
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+      var config = state.config;
+      var searchColIndices = config.searchColIndices || [config.searchColIndex];
+      var batchSize = 5; // 한 번에 5개씩 병렬 분석
+      var startIdx = state.batchContextIndex || 0;
+      var endIdx = Math.min(startIdx + batchSize, state.totalItems);
+
+      var itemContents = [];
+      var itemIndices = [];
+      for (var b = startIdx; b < endIdx; b++) {
+        var row = b + 2;
+        var parts = [];
+        searchColIndices.forEach(function(colIdx) {
+          var val = sheet.getRange(row, colIdx + 1).getValue();
+          if (val && String(val).trim() !== '') parts.push(String(val).trim());
+        });
+        var content = parts.join(' ');
+        if (content) {
+          itemContents.push(content);
+          itemIndices.push(b);
+        }
+      }
+
+      if (itemContents.length > 0) {
+        // 병렬 문맥 분석 (UrlFetchApp.fetchAll)
+        var contexts = batchAnalyzeContext(itemContents, apiKey);
+        if (!state.contextCache) state.contextCache = {};
+        contexts.forEach(function(ctx, i) {
+          if (ctx) state.contextCache[String(itemIndices[i])] = ctx;
+        });
+      }
+
+      if (endIdx < state.totalItems) {
+        state.batchContextIndex = endIdx;
+        if (Date.now() - startTime > TIME_LIMIT_MS) {
+          saveState(state);
+          scheduleContinuation(60000);
+          return;
+        }
+        // 다음 배치 계속
+        saveState(state);
+      } else {
+        state.batchContextDone = true;
+        saveState(state);
+      }
+
+      // 시간 여유가 없으면 다음 continuation에서 처리 계속
+      if (Date.now() - startTime > TIME_LIMIT_MS) {
+        saveState(state);
+        scheduleContinuation(60000);
+        return;
+      }
+    } else {
+      state.batchContextDone = true;
+      saveState(state);
+    }
+  }
+
   // Phase 2: 항목별 처리
   if (state.phase === 'PROCESSING') {
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
@@ -89,7 +152,9 @@ function processItems() {
       }
 
       var itemStartTime = Date.now();
-      var result = processItem(String(itemContent), state, config.matchMode);
+      // 캐시된 문맥 분석 결과가 있으면 전달
+      var cachedContext = (state.contextCache && state.contextCache[String(i)]) || null;
+      var result = processItem(String(itemContent), state, config.matchMode, cachedContext);
 
       // 단일 항목 타임아웃 체크
       if (Date.now() - itemStartTime > ITEM_TIMEOUT_MS) {
@@ -163,13 +228,18 @@ function processItems() {
   }
 }
 
-function processItem(itemContent, state, matchMode) {
+function processItem(itemContent, state, matchMode, cachedContext) {
   var folderIds = state.folderIds || [];
   var pathMap = state.pathMap || {};
   var searchResult;
 
   if (matchMode === 'ai') {
-    searchResult = searchByAI(itemContent, folderIds);
+    // 캐시된 문맥 분석이 있으면 활용하여 검색 단계 건너뛰기
+    if (cachedContext) {
+      searchResult = searchByAIWithContext(itemContent, folderIds, cachedContext);
+    } else {
+      searchResult = searchByAI(itemContent, folderIds);
+    }
     // AI 실패 시 키워드 fallback
     if (searchResult.error === 'AI_FALLBACK') {
       searchResult = searchByKeyword(itemContent, folderIds);
@@ -179,14 +249,18 @@ function processItem(itemContent, state, matchMode) {
     // 1차: 키워드로 후보 수집 (커버리지 검증 없이 Drive 검색만)
     var keywordCandidates = searchByKeywordRaw(itemContent, folderIds);
 
+    // 2차: 키워드 후보 + 문맥 분석 결과로 AI 검증
+    var context = cachedContext || null;
+
     if (keywordCandidates.files && keywordCandidates.files.length > 0) {
-      // 2차: 키워드 후보를 AI가 관련도 검증
-      searchResult = verifyWithAI(itemContent, keywordCandidates);
+      searchResult = verifyWithAI(itemContent, keywordCandidates, context);
       if (searchResult.files && searchResult.files.length > 0) {
         searchResult.verifiedByAI = true;
       } else {
-        // AI 검증 통과 후보 없음 → AI로 전체 재검색
-        var aiResult = searchByAI(itemContent, folderIds);
+        // AI 검증 통과 후보 없음 → 문맥 기반 전체 재검색
+        var aiResult = cachedContext
+          ? searchByAIWithContext(itemContent, folderIds, cachedContext)
+          : searchByAI(itemContent, folderIds);
         if (aiResult.error !== 'AI_FALLBACK' && aiResult.files && aiResult.files.length > 0) {
           searchResult = aiResult;
           searchResult.escalatedToAI = true;

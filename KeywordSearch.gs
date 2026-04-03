@@ -68,7 +68,7 @@ function searchByKeywordRaw(itemContent, folderIds) {
  * 키워드로 수집한 후보를 AI(Gemini)로 관련도 검증.
  * 70점 이상 + 커버리지 80% 통과 파일만 반환.
  */
-function verifyWithAI(itemContent, keywordResult) {
+function verifyWithAI(itemContent, keywordResult, cachedContext) {
   var apiKey = getGeminiApiKey();
   if (!apiKey) {
     // API 키 없으면 커버리지 검증만으로 fallback
@@ -89,9 +89,11 @@ function verifyWithAI(itemContent, keywordResult) {
     return { files: [], keywords: keywordResult.keywords };
   }
 
+  // 캐시된 문맥이 있으면 문맥 기반 평가, 없으면 기본 평가
+  var context = cachedContext || { documentType: '', purpose: '' };
   var scored;
   try {
-    scored = evaluateRelevanceWithGemini(itemContent, candidates, apiKey);
+    scored = evaluateWithContext(itemContent, context, candidates, apiKey);
   } catch (e) {
     // AI 평가 실패 → 커버리지만으로 판정
     var searchTerms = extractSearchTerms(itemContent);
