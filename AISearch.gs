@@ -3,7 +3,7 @@
  * 키워드 추출 + 관련도 평가
  */
 
-var GEMINI_MODEL = 'gemini-2.5-flash';
+var GEMINI_MODEL = 'gemini-3-flash';
 var GEMINI_TIMEOUT_MS = 30000;
 var RELEVANCE_THRESHOLD = 70;
 
