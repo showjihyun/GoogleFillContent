@@ -1,17 +1,24 @@
 /**
  * SearchEngine.gs: 메인 처리 루프
- * Strategy 패턴: processItem(item, searchStrategy)
- * 시간 기반 자동 중단 + continuation
+ *
+ * AI 모드 흐름 (파일 내용 기반 일괄 매칭):
+ *   Phase 1: 폴더 트리 수집
+ *   Phase 2: 파일 목록 수집 + 내용 인덱싱 (페이지 단위, Continue 최적화)
+ *   Phase 3: 매칭 계획 수립 (시트 전체 분석)
+ *   Phase 4: Gemini 일괄 매칭 (항목 ↔ 파일+페이지)
+ *   Phase 5: 결과 기입
+ *
+ * 키워드 모드 흐름 (기존 방식 유지):
+ *   Phase 1 → 항목별 개별 검색+매칭 → 결과 기입
  */
 
-var ITEM_TIMEOUT_MS = 50000; // 단일 항목 50초 제한
+var ITEM_TIMEOUT_MS = 50000;
 
 function processItems() {
   var startTime = Date.now();
   var state = loadState();
   if (!state || !state.config) return;
 
-  // 실행 시작 전 취소 체크
   if (isCancelRequested()) {
     state.phase = 'DONE';
     clearCancelFlag();
@@ -19,138 +26,252 @@ function processItems() {
     return;
   }
 
-  // Phase 1: 폴더 트리 수집
+  var config = state.config;
+
+  // ================================================================
+  // Phase 1: 폴더 트리 수집 (모든 모드 공통)
+  // ================================================================
   if (state.phase === 'TREE_COLLECTION') {
     var treeResult = collectSubfolders(
-      extractFolderIdFromUrl(state.config.folderUrl),
+      extractFolderIdFromUrl(config.folderUrl),
       startTime,
       state.treeState || null
     );
-
-    if (treeResult === null) return; // continuation 예약됨
+    if (treeResult === null) return;
 
     state.folderIds = treeResult.folderIds;
     state.pathMap = treeResult.pathMap;
-    state.phase = 'PROCESSING';
 
-    // 시트에서 검색 대상 항목 수 세기
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-    var lastRow = sheet.getLastRow();
-    state.totalItems = lastRow > 1 ? lastRow - 1 : 0;
+    state.totalItems = sheet.getLastRow() > 1 ? sheet.getLastRow() - 1 : 0;
     state.lastProcessedIndex = 0;
+
+    // AI 모드면 파일 인덱싱 단계로, 키워드 모드면 바로 처리
+    if (config.matchMode === 'ai' || config.matchMode === 'keyword_then_ai') {
+      state.phase = 'FILE_INDEXING';
+    } else {
+      state.phase = 'ITEM_PROCESSING';
+    }
     saveState(state);
   }
 
-  // Phase 1.5: 시트 전체 분석 → 매칭 계획 수립 → 항목별 문맥 분석
-  // (ai, keyword_then_ai 모드만)
-  if (state.phase === 'PROCESSING' && !state.batchContextDone &&
-      (state.config.matchMode === 'ai' || state.config.matchMode === 'keyword_then_ai')) {
-    var apiKey = getGeminiApiKey();
-    if (apiKey) {
-      var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-      var config = state.config;
-      var searchColIndices = config.searchColIndices || [config.searchColIndex];
-
-      // Step A: 시트 전체 항목을 먼저 읽고 매칭 계획 수립 (1회만)
-      if (!state.matchingPlan) {
-        var allItems = [];
-        for (var r = 0; r < state.totalItems; r++) {
-          var row = r + 2;
-          var parts = [];
-          searchColIndices.forEach(function(colIdx) {
-            var val = sheet.getRange(row, colIdx + 1).getValue();
-            if (val && String(val).trim() !== '') parts.push(String(val).trim());
-          });
-          allItems.push(parts.join(' '));
-        }
-
-        try {
-          state.matchingPlan = createMatchingPlan(allItems, apiKey);
-        } catch (e) {
-          state.matchingPlan = { domain: 'unknown', groups: [], strategy: 'individual' };
-          logError({ itemName: 'MatchingPlan', error: '매칭 계획 수립 실패: ' + e.message, matchMode: 'plan' });
-        }
-        saveState(state);
-
-        if (Date.now() - startTime > TIME_LIMIT_MS) {
-          scheduleContinuation(60000);
-          return;
-        }
-      }
-
-      // Step B: 매칭 계획을 기반으로 항목별 문맥 분석 (배치)
-      var batchSize = 5;
-      var startIdx = state.batchContextIndex || 0;
-      var endIdx = Math.min(startIdx + batchSize, state.totalItems);
-
-      var itemContents = [];
-      var itemIndices = [];
-      for (var b = startIdx; b < endIdx; b++) {
-        var row = b + 2;
-        var parts = [];
-        searchColIndices.forEach(function(colIdx) {
-          var val = sheet.getRange(row, colIdx + 1).getValue();
-          if (val && String(val).trim() !== '') parts.push(String(val).trim());
-        });
-        var content = parts.join(' ');
-        if (content) {
-          itemContents.push(content);
-          itemIndices.push(b);
-        }
-      }
-
-      if (itemContents.length > 0) {
-        var contexts = batchAnalyzeContextWithPlan(itemContents, state.matchingPlan, apiKey);
-        if (!state.contextCache) state.contextCache = {};
-        contexts.forEach(function(ctx, i) {
-          if (ctx) state.contextCache[String(itemIndices[i])] = ctx;
-        });
-      }
-
-      if (endIdx < state.totalItems) {
-        state.batchContextIndex = endIdx;
-        saveState(state);
-        if (Date.now() - startTime > TIME_LIMIT_MS) {
-          scheduleContinuation(60000);
-          return;
-        }
-      } else {
-        state.batchContextDone = true;
-        saveState(state);
-      }
+  // ================================================================
+  // Phase 2: 파일 목록 수집 + 내용 인덱싱 (AI 모드)
+  // ================================================================
+  if (state.phase === 'FILE_INDEXING') {
+    if (!state.allFiles) {
+      state.allFiles = collectAllFiles(state.folderIds);
+      state.fileIndexes = [];
+      state.fileIndexPos = 0;
+      saveState(state);
 
       if (Date.now() - startTime > TIME_LIMIT_MS) {
+        scheduleContinuation(60000);
+        return;
+      }
+    }
+
+    // 시트 항목 읽기 (인덱싱 시 quickMatch에 필요)
+    var searchItems = readAllSearchItems(state);
+
+    // 파일별 내용 인덱싱 (Continue 최적화)
+    var pos = state.fileIndexPos || 0;
+    while (pos < state.allFiles.length) {
+      if (isCancelRequested()) {
+        state.phase = 'DONE';
+        clearCancelFlag();
+        saveState(state);
+        return;
+      }
+      if (Date.now() - startTime > TIME_LIMIT_MS) {
+        state.fileIndexPos = pos;
         saveState(state);
         scheduleContinuation(60000);
         return;
       }
-    } else {
-      state.batchContextDone = true;
+
+      var file = state.allFiles[pos];
+      var index = indexFileContent(file, searchItems, startTime);
+      state.fileIndexes.push(index);
+      pos++;
+
+      // 10개마다 상태 저장
+      if (pos % 10 === 0) {
+        state.fileIndexPos = pos;
+        state.processedCount = pos;
+        state.totalItems = state.allFiles.length; // 진행률 표시용
+        saveState(state);
+      }
+    }
+
+    state.fileIndexPos = pos;
+    state.phase = 'MATCHING_PLAN';
+    saveState(state);
+  }
+
+  // ================================================================
+  // Phase 3: 매칭 계획 수립 (AI 모드)
+  // ================================================================
+  if (state.phase === 'MATCHING_PLAN') {
+    var apiKey = getGeminiApiKey();
+    if (!apiKey) {
+      // API 키 없으면 키워드 모드로 fallback
+      state.phase = 'ITEM_PROCESSING';
       saveState(state);
+    } else {
+      var searchItems = readAllSearchItems(state);
+
+      if (!state.matchingPlan) {
+        try {
+          state.matchingPlan = createMatchingPlan(searchItems, apiKey);
+        } catch (e) {
+          state.matchingPlan = { domain: 'unknown' };
+          logError({ itemName: 'MatchingPlan', error: e.message, matchMode: 'plan' });
+        }
+        saveState(state);
+      }
+
+      state.phase = 'AI_BULK_MATCHING';
+      // 진행률 표시 리셋
+      state.totalItems = readAllSearchItems(state).length;
+      state.processedCount = 0;
+      saveState(state);
+
+      if (Date.now() - startTime > TIME_LIMIT_MS) {
+        scheduleContinuation(60000);
+        return;
+      }
     }
   }
 
-  // Phase 2: 항목별 처리
-  if (state.phase === 'PROCESSING') {
+  // ================================================================
+  // Phase 4: Gemini 일괄 매칭 (AI 모드)
+  // ================================================================
+  if (state.phase === 'AI_BULK_MATCHING') {
+    var apiKey = getGeminiApiKey();
+    var searchItems = readAllSearchItems(state);
+    var fileIndices = state.fileIndexes || [];
+
+    var matches;
+    try {
+      matches = geminiMatchAllChunked(searchItems, fileIndices, state.matchingPlan, apiKey, startTime);
+    } catch (e) {
+      logError({ itemName: 'BulkMatching', error: e.message, matchMode: 'ai' });
+      matches = [];
+    }
+
+    state.aiMatches = matches;
+    state.phase = 'WRITE_RESULTS';
+    saveState(state);
+
+    if (Date.now() - startTime > TIME_LIMIT_MS) {
+      scheduleContinuation(60000);
+      return;
+    }
+  }
+
+  // ================================================================
+  // Phase 5: 결과 기입 (AI 모드)
+  // ================================================================
+  if (state.phase === 'WRITE_RESULTS') {
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-    var config = state.config;
-    // 복수 검색 컬럼 지원 (하위 호환: searchColIndex → searchColIndices)
+    var searchColIndices = config.searchColIndices || [config.searchColIndex];
+    var resultCol = config.resultColIndex + 1;
+    var remarksCol = config.remarksColIndex >= 0 ? config.remarksColIndex + 1 : -1;
+    var matches = state.aiMatches || [];
+    var searchItems = readAllSearchItems(state);
+    var matchResults = [];
+
+    state.successCount = 0;
+    state.failCount = 0;
+    state.multiMatchCount = 0;
+    state.errors = [];
+
+    for (var i = 0; i < searchItems.length; i++) {
+      if (Date.now() - startTime > TIME_LIMIT_MS) {
+        state.processedCount = i;
+        saveState(state);
+        scheduleContinuation(60000);
+        return;
+      }
+
+      var row = i + 2;
+      var match = matches.find(function(m) { return m.itemIndex === i; });
+
+      if (match && match.fileId && match.score >= 60) {
+        var fileUrl = getFileUrl(match.fileId);
+        var displayValue = match.fileName + '\n' + fileUrl;
+        sheet.getRange(row, resultCol).setValue(displayValue);
+
+        var remarks = 'AI 점수: ' + match.score;
+        if (match.page) remarks += ' | ' + match.page;
+        if (match.reason) remarks += ' | ' + match.reason;
+        if (remarksCol > 0) sheet.getRange(row, remarksCol).setValue(remarks);
+
+        state.successCount++;
+
+        matchResults.push({
+          row: row,
+          itemName: searchItems[i].substring(0, 50),
+          fileId: match.fileId,
+          fileName: match.fileName,
+          fileUrl: fileUrl,
+          matchMode: 'ai',
+          score: match.score,
+          timestamp: new Date().toISOString()
+        });
+
+        logMatch({
+          itemName: searchItems[i].substring(0, 50),
+          searchKeywords: '',
+          candidateCount: 1,
+          selectedFile: match.fileName,
+          selectionReason: match.reason || '',
+          matchMode: 'ai-bulk',
+          score: match.score
+        });
+      } else {
+        state.failCount++;
+        var reason = (match && match.reason) ? match.reason : '관련 파일 없음';
+        if (state.errors.length < 50) {
+          state.errors.push(searchItems[i].substring(0, 30) + ': ' + reason);
+        }
+        if (remarksCol > 0) {
+          sheet.getRange(row, remarksCol).setValue('매칭 실패 — ' + reason);
+        }
+        logError({
+          itemName: searchItems[i].substring(0, 50),
+          error: reason,
+          matchMode: 'ai-bulk'
+        });
+      }
+
+      state.processedCount = i + 1;
+    }
+
+    if (matchResults.length > 0) saveMatchResults(matchResults);
+    state.phase = 'DONE';
+    state.totalItems = searchItems.length;
+    saveState(state);
+  }
+
+  // ================================================================
+  // 키워드 모드: 항목별 개별 처리 (기존 방식)
+  // ================================================================
+  if (state.phase === 'ITEM_PROCESSING') {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
     var searchColIndices = config.searchColIndices || [config.searchColIndex];
     var resultCol = config.resultColIndex + 1;
     var remarksCol = config.remarksColIndex >= 0 ? config.remarksColIndex + 1 : -1;
     var matchResults = [];
 
     for (var i = state.lastProcessedIndex; i < state.totalItems; i++) {
-      // 시간 체크
       if (Date.now() - startTime > TIME_LIMIT_MS) {
         state.lastProcessedIndex = i;
-        state.phase = 'PROCESSING';
         saveState(state);
         scheduleContinuation(60000);
         return;
       }
-
-      // 취소 체크
       if (isCancelRequested()) {
         state.phase = 'DONE';
         clearCancelFlag();
@@ -158,85 +279,43 @@ function processItems() {
         return;
       }
 
-      var row = i + 2; // 헤더 = 1행, 데이터 = 2행~
-
-      // 복수 컬럼에서 내용을 읽어 결합 (공백 구분)
+      var row = i + 2;
       var contentParts = [];
       searchColIndices.forEach(function(colIdx) {
-        var val = sheet.getRange(row, colIdx + 1).getValue(); // 0-based → 1-based
-        if (val && String(val).trim() !== '') {
-          contentParts.push(String(val).trim());
-        }
+        var val = sheet.getRange(row, colIdx + 1).getValue();
+        if (val && String(val).trim() !== '') contentParts.push(String(val).trim());
       });
       var itemContent = contentParts.join(' ');
 
-      if (!itemContent || itemContent.trim() === '') {
-        state.lastProcessedIndex = i + 1;
+      if (!itemContent) {
         state.processedCount = (state.processedCount || 0) + 1;
+        state.lastProcessedIndex = i + 1;
         saveState(state);
         continue;
       }
 
-      var itemStartTime = Date.now();
-      // 캐시된 문맥 분석 결과가 있으면 전달
-      var cachedContext = (state.contextCache && state.contextCache[String(i)]) || null;
-      var result = processItem(String(itemContent), state, config.matchMode, cachedContext);
+      var result = processItemKeyword(String(itemContent), state);
 
-      // 단일 항목 타임아웃 체크
-      if (Date.now() - itemStartTime > ITEM_TIMEOUT_MS) {
-        result = { success: false, error: '타임아웃 — 항목 처리 시간 초과' };
-      }
-
-      // 결과 기입: 파일명 + 링크
       if (result.success && result.fileUrl) {
-        var displayValue = result.fileName + '\n' + result.fileUrl;
-        sheet.getRange(row, resultCol).setValue(displayValue);
-        if (remarksCol > 0 && result.remarks) {
-          sheet.getRange(row, remarksCol).setValue(result.remarks);
-        }
+        sheet.getRange(row, resultCol).setValue(result.fileName + '\n' + result.fileUrl);
+        if (remarksCol > 0 && result.remarks) sheet.getRange(row, remarksCol).setValue(result.remarks);
         state.successCount = (state.successCount || 0) + 1;
 
-        if (result.isMultiMatch) {
-          state.multiMatchCount = (state.multiMatchCount || 0) + 1;
-        }
-
         matchResults.push({
-          row: row,
-          itemName: String(itemContent).substring(0, 50),
-          fileId: result.fileId,
-          fileName: result.fileName,
-          fileUrl: result.fileUrl,
-          filePath: result.filePath,
-          matchMode: config.matchMode,
-          score: result.score || '',
-          timestamp: new Date().toISOString()
+          row: row, itemName: itemContent.substring(0, 50), fileId: result.fileId,
+          fileName: result.fileName, fileUrl: result.fileUrl, matchMode: 'keyword',
+          score: '', timestamp: new Date().toISOString()
         });
-
         logMatch({
-          itemName: String(itemContent).substring(0, 50),
-          searchKeywords: (result.keywords || []).join(', '),
-          candidateCount: result.candidateCount || 0,
-          selectedFile: result.fileName,
-          selectionReason: result.selectionReason || '',
-          matchMode: config.matchMode,
-          score: result.score || ''
+          itemName: itemContent.substring(0, 50), searchKeywords: (result.keywords || []).join(', '),
+          candidateCount: result.candidateCount || 0, selectedFile: result.fileName,
+          selectionReason: '', matchMode: 'keyword'
         });
       } else {
         state.failCount = (state.failCount || 0) + 1;
-        var errorMsg = String(itemContent).substring(0, 30) + ': ' + (result.error || '매칭 실패');
         state.errors = state.errors || [];
-        if (state.errors.length < 50) state.errors.push(errorMsg);
-
-        if (remarksCol > 0) {
-          sheet.getRange(row, remarksCol).setValue('매칭 실패 — ' + (result.error || '관련 파일 없음'));
-        }
-
-        logError({
-          itemName: String(itemContent).substring(0, 50),
-          searchKeywords: (result.keywords || []).join(', '),
-          error: result.error || '매칭 실패',
-          matchMode: config.matchMode
-        });
+        if (state.errors.length < 50) state.errors.push(itemContent.substring(0, 30) + ': ' + (result.error || '매칭 실패'));
+        if (remarksCol > 0) sheet.getRange(row, remarksCol).setValue('매칭 실패 — ' + (result.error || '관련 파일 없음'));
       }
 
       state.processedCount = (state.processedCount || 0) + 1;
@@ -244,158 +323,67 @@ function processItems() {
       saveState(state);
     }
 
-    // 매칭 결과 저장
-    if (matchResults.length > 0) {
-      saveMatchResults(matchResults);
-    }
-
+    if (matchResults.length > 0) saveMatchResults(matchResults);
     state.phase = 'DONE';
     saveState(state);
   }
 }
 
-function processItem(itemContent, state, matchMode, cachedContext) {
+// ================================================================
+// 키워드 모드용 개별 항목 처리
+// ================================================================
+
+function processItemKeyword(itemContent, state) {
   var folderIds = state.folderIds || [];
   var pathMap = state.pathMap || {};
-  var searchResult;
 
-  if (matchMode === 'ai') {
-    // 캐시된 문맥 분석이 있으면 활용하여 검색 단계 건너뛰기
-    if (cachedContext) {
-      searchResult = searchByAIWithContext(itemContent, folderIds, cachedContext);
-    } else {
-      searchResult = searchByAI(itemContent, folderIds);
-    }
-    // AI 실패 시 키워드 fallback
-    if (searchResult.error === 'AI_FALLBACK') {
-      searchResult = searchByKeyword(itemContent, folderIds);
-      searchResult.fallback = true;
-    }
-  } else if (matchMode === 'keyword_then_ai') {
-    // 1차: 키워드로 후보 수집 (커버리지 검증 없이 Drive 검색만)
-    var keywordCandidates = searchByKeywordRaw(itemContent, folderIds);
-
-    // 2차: 키워드 후보 + 문맥 분석 결과로 AI 검증
-    var context = cachedContext || null;
-
-    if (keywordCandidates.files && keywordCandidates.files.length > 0) {
-      searchResult = verifyWithAI(itemContent, keywordCandidates, context);
-      if (searchResult.files && searchResult.files.length > 0) {
-        searchResult.verifiedByAI = true;
-      } else {
-        // AI 검증 통과 후보 없음 → 문맥 기반 전체 재검색
-        var aiResult = cachedContext
-          ? searchByAIWithContext(itemContent, folderIds, cachedContext)
-          : searchByAI(itemContent, folderIds);
-        if (aiResult.error !== 'AI_FALLBACK' && aiResult.files && aiResult.files.length > 0) {
-          searchResult = aiResult;
-          searchResult.escalatedToAI = true;
-        } else {
-          searchResult = keywordCandidates;
-          searchResult.aiVerifyFailed = true;
-        }
-      }
-    } else {
-      // 키워드 후보 0건 → AI로 전체 검색
-      var aiResult = searchByAI(itemContent, folderIds);
-      if (aiResult.error !== 'AI_FALLBACK' && aiResult.files && aiResult.files.length > 0) {
-        searchResult = aiResult;
-        searchResult.escalatedToAI = true;
-      } else {
-        searchResult = keywordCandidates;
-      }
-    }
-  } else {
-    searchResult = searchByKeyword(itemContent, folderIds);
-  }
-
+  var searchResult = searchByKeyword(itemContent, folderIds);
   var files = searchResult.files || [];
   if (files.length === 0) {
-    return {
-      success: false,
-      error: searchResult.error || '관련 파일을 찾을 수 없습니다',
-      keywords: searchResult.keywords
-    };
+    return { success: false, error: '관련 파일 없음', keywords: searchResult.keywords };
   }
 
-  // 버전 해석
   var resolved = resolveVersion(files);
-  var bestFile;
-  var isMultiMatch = false;
+  var bestFile = Array.isArray(resolved) ? resolved[0] : resolved;
+
   var remarks = '';
-
-  if (Array.isArray(resolved)) {
-    // 여러 기본명 그룹이 있는 경우 — 첫 번째 선택, 나머지 비고
-    bestFile = resolved[0];
-    isMultiMatch = true;
-    var otherNames = resolved.slice(1).map(function(f) { return f.name; }).join(', ');
-    remarks = '후보 ' + resolved.length + '개 (' + otherNames + ')';
-  } else {
-    bestFile = resolved;
-  }
-
-  // AI 스코어 반영
-  if (searchResult.scores) {
-    var fileScore = searchResult.scores.find(function(s) { return s.file.id === bestFile.id; });
-    if (fileScore) {
-      remarks = (remarks ? remarks + ' | ' : '') + 'AI 점수: ' + fileScore.score;
-    }
-    // AI 다중 후보 (70점 이상 여러 개)
-    var highScores = searchResult.scores.filter(function(s) { return s.score >= RELEVANCE_THRESHOLD; });
-    if (highScores.length > 1) {
-      isMultiMatch = true;
-      var otherFiles = highScores.filter(function(s) { return s.file.id !== bestFile.id; });
-      if (otherFiles.length > 0) {
-        remarks = '후보 ' + highScores.length + '개 (' +
-          otherFiles.map(function(s) { return s.file.name + ':' + s.score + '점'; }).join(', ') + ')';
-      }
-    }
-  }
-
-  if (searchResult.fallback) {
-    remarks = (remarks ? remarks + ' | ' : '') + 'AI 매칭 실패, 키워드 매칭으로 대체';
-  }
-
-  if (searchResult.verifiedByAI) {
-    remarks = (remarks ? remarks + ' | ' : '') + '키워드 후보 → AI 검증 통과';
-  }
-
-  if (searchResult.escalatedToAI) {
-    remarks = (remarks ? remarks + ' | ' : '') + '키워드 실패 → AI 전체 재검색으로 매칭';
-  }
-
-  if (searchResult.aiVerifyFailed) {
-    remarks = (remarks ? remarks + ' | ' : '') + 'AI 검증 미통과 — 키워드 매칭 결과 사용';
-  }
-
-  // 커버리지 + 페이지 정보를 비고에 추가
   var coverage = bestFile._coverage;
   if (coverage) {
-    remarks = (remarks ? remarks + ' | ' : '') + '커버리지: ' + coverage.coveragePercent + '%';
-    if (coverage.pageString) {
-      remarks += ' | ' + coverage.pageString;
-    }
-    if (coverage.unmatchedTerms && coverage.unmatchedTerms.length > 0) {
-      remarks += ' | 미포함: ' + coverage.unmatchedTerms.slice(0, 3).join(', ');
-    }
+    remarks = '커버리지: ' + coverage.coveragePercent + '%';
+    if (coverage.pageString) remarks += ' | ' + coverage.pageString;
   }
 
-  var filePath = getFilePath(bestFile.id, pathMap);
-  var fileUrl = getFileUrl(bestFile.id);
-
   return {
-    success: true,
-    fileId: bestFile.id,
-    fileName: bestFile.name,
-    fileUrl: fileUrl,
-    filePath: filePath,
-    keywords: searchResult.keywords,
-    candidateCount: files.length,
-    selectionReason: bestFile.selectionReason || '최고 버전/최신 파일',
-    score: searchResult.scores ? (searchResult.scores[0] || {}).score : '',
-    isMultiMatch: isMultiMatch,
-    remarks: remarks
+    success: true, fileId: bestFile.id, fileName: bestFile.name,
+    fileUrl: getFileUrl(bestFile.id), keywords: searchResult.keywords,
+    candidateCount: files.length, remarks: remarks
   };
+}
+
+// ================================================================
+// 유틸리티
+// ================================================================
+
+function readAllSearchItems(state) {
+  if (state._searchItemsCache) return state._searchItemsCache;
+
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var config = state.config;
+  var searchColIndices = config.searchColIndices || [config.searchColIndex];
+  var lastRow = sheet.getLastRow();
+  var items = [];
+
+  for (var r = 2; r <= lastRow; r++) {
+    var parts = [];
+    searchColIndices.forEach(function(colIdx) {
+      var val = sheet.getRange(r, colIdx + 1).getValue();
+      if (val && String(val).trim() !== '') parts.push(String(val).trim());
+    });
+    items.push(parts.join(' '));
+  }
+
+  state._searchItemsCache = items;
+  return items;
 }
 
 function activateLogSheet() {
