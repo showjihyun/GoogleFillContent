@@ -11,6 +11,14 @@ function processItems() {
   var state = loadState();
   if (!state || !state.config) return;
 
+  // 실행 시작 전 취소 체크
+  if (isCancelRequested()) {
+    state.phase = 'DONE';
+    clearCancelFlag();
+    saveState(state);
+    return;
+  }
+
   // Phase 1: 폴더 트리 수집
   if (state.phase === 'TREE_COLLECTION') {
     var treeResult = collectSubfolders(

@@ -470,7 +470,19 @@
   }
 
   function cancelSearch() {
-    google.script.run.cancelSearch();
+    google.script.run.withSuccessHandler(function() {
+      stopPolling();
+      setSearching(false);
+      showCancelled();
+    }).cancelSearch();
+  }
+
+  function showCancelled() {
+    document.getElementById('resultArea').classList.remove('hidden');
+    document.getElementById('progressArea').classList.add('hidden');
+    document.getElementById('resultSuccess').classList.add('hidden');
+    document.getElementById('resultError').classList.remove('hidden');
+    document.getElementById('errorMessage').textContent = '검색이 취소되었습니다. 처리된 항목까지의 결과는 시트에 저장되어 있습니다.';
   }
 
   // --- Progress Polling ---

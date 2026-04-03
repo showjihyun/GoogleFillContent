@@ -79,40 +79,48 @@ function extractFolderIdFromUrl(url) {
 }
 
 function startSearch(config) {
+  // 이미 실행 중인지 확인 (잠금 시도 → 즉시 해제)
   var lock = LockService.getScriptLock();
-  var hasLock = lock.tryLock(10000);
+  var hasLock = lock.tryLock(1000);
   if (!hasLock) {
     return { success: false, error: '이미 검색이 실행 중입니다. 잠시 후 다시 시도하세요.' };
   }
-  try {
-    saveRecentFolder(config.folderUrl);
-    var state = {
-      phase: 'TREE_COLLECTION',
-      config: config,
-      lastProcessedIndex: 0,
-      totalItems: 0,
-      processedCount: 0,
-      successCount: 0,
-      multiMatchCount: 0,
-      failCount: 0,
-      errors: [],
-      startedAt: new Date().toISOString(),
-      folderIds: [],
-      pathMap: {}
-    };
-    saveState(state);
-    clearCancelFlag();
-    processItems();
-    return { success: true };
-  } catch (e) {
-    return { success: false, error: e.message };
-  } finally {
-    lock.releaseLock();
-  }
+  lock.releaseLock();
+
+  saveRecentFolder(config.folderUrl);
+  var state = {
+    phase: 'TREE_COLLECTION',
+    config: config,
+    lastProcessedIndex: 0,
+    totalItems: 0,
+    processedCount: 0,
+    successCount: 0,
+    multiMatchCount: 0,
+    failCount: 0,
+    errors: [],
+    startedAt: new Date().toISOString(),
+    folderIds: [],
+    pathMap: {}
+  };
+  saveState(state);
+  clearCancelFlag();
+
+  // processItems()를 직접 호출하지 않고 트리거로 예약.
+  // 이렇게 하면 startSearch()가 즉시 반환되어
+  // cancelSearch() 호출이 블로킹되지 않는다.
+  scheduleContinuation(1000); // 1초 후 실행
+
+  return { success: true };
 }
 
 function cancelSearch() {
   setCancelFlag();
+  cleanupContinuationTriggers(); // 예약된 다음 실행도 취소
+  var state = loadState();
+  if (state && state.phase !== 'DONE') {
+    state.phase = 'DONE';
+    saveState(state);
+  }
   return { success: true };
 }
 
