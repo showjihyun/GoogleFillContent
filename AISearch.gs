@@ -51,12 +51,24 @@ function searchByAI(itemContent, folderIds) {
 
   // Step 4: 70점 이상 필터링
   var matched = scored.filter(function(s) { return s.score >= RELEVANCE_THRESHOLD; });
-  var unmatched = scored.filter(function(s) { return s.score < RELEVANCE_THRESHOLD; });
+
+  // Step 5: 커버리지 80% 검증 + 페이지 감지
+  var searchTerms = extractSearchTerms(itemContent);
+  var verifiedFiles = [];
+
+  matched.forEach(function(s) {
+    var coverageResult = calculateCoverage(s.file.id, searchTerms);
+    if (coverageResult.coverage >= COVERAGE_THRESHOLD) {
+      s.file._coverage = coverageResult;
+      verifiedFiles.push(s.file);
+    }
+  });
 
   return {
-    files: matched.map(function(s) { return s.file; }),
+    files: verifiedFiles,
     keywords: keywords,
     scores: scored,
+    searchTerms: searchTerms,
     error: null
   };
 }

@@ -24,7 +24,19 @@ function searchByKeyword(itemContent, folderIds) {
     });
   }
 
-  return { files: allFiles, keywords: keywords };
+  // 커버리지 80% 검증: 검색 기준 컬럼 내용의 핵심 용어 중 80% 이상 포함된 파일만 매칭
+  var searchTerms = extractSearchTerms(itemContent);
+  var verifiedFiles = [];
+
+  allFiles.forEach(function(file) {
+    var result = calculateCoverage(file.id, searchTerms);
+    if (result.coverage >= COVERAGE_THRESHOLD) {
+      file._coverage = result;
+      verifiedFiles.push(file);
+    }
+  });
+
+  return { files: verifiedFiles, keywords: keywords, searchTerms: searchTerms };
 }
 
 function extractKeywordsFromContent(content) {

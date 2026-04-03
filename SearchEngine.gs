@@ -217,6 +217,18 @@ function processItem(itemContent, state, matchMode) {
     remarks = (remarks ? remarks + ' | ' : '') + 'AI 매칭 실패, 키워드 매칭으로 대체';
   }
 
+  // 커버리지 + 페이지 정보를 비고에 추가
+  var coverage = bestFile._coverage;
+  if (coverage) {
+    remarks = (remarks ? remarks + ' | ' : '') + '커버리지: ' + coverage.coveragePercent + '%';
+    if (coverage.pageString) {
+      remarks += ' | ' + coverage.pageString;
+    }
+    if (coverage.unmatchedTerms && coverage.unmatchedTerms.length > 0) {
+      remarks += ' | 미포함: ' + coverage.unmatchedTerms.slice(0, 3).join(', ');
+    }
+  }
+
   var filePath = getFilePath(bestFile.id, pathMap);
   var fileUrl = getFileUrl(bestFile.id);
 
