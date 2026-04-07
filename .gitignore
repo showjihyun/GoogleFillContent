@@ -1,0 +1,14 @@
+# Python
+python/.env
+python/credentials.json
+python/.venv/
+python/__pycache__/
+python/*.pyc
+python/log/
+python/.pytest_cache/
+python/tests/__pycache__/
+
+# IDE / OS
+.claude/
+*.png
+*.jpg
